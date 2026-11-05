@@ -1,0 +1,219 @@
+/*
+  Styles for the Gemini-Live-style voice client.
+
+  Key trick: app.js updates one CSS variable, --level (0 = silent, 1 = loud),
+  about 60 times per second. The glow and the wave pill read that variable,
+  so they grow and shrink with the voice without any extra JavaScript.
+*/
+
+:root {
+  --level: 0;
+  --bg: #0b0d12;
+  --surface: #1b1f27;
+  --text: #e8eaed;
+  --text-dim: #9aa0a6;
+  --blue-dark: #1a73e8;
+  --blue: #4285f4;
+  --blue-light: #8ab4f8;
+  --red: #ea4335;
+}
+
+* { box-sizing: border-box; }
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  min-height: 100dvh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+
+/* ---------- The blue glow rising from the bottom ---------- */
+.glow {
+  position: fixed;
+  left: -20%;
+  right: -20%;
+  bottom: 0;
+  /* Taller and brighter when the voice is louder. */
+  height: calc(42vh + var(--level) * 26vh);
+  opacity: calc(0.75 + var(--level) * 0.25);
+  background:
+    radial-gradient(ellipse 60% 85% at 50% 100%, rgba(138, 180, 248, 0.55), transparent 70%),
+    radial-gradient(ellipse 90% 100% at 50% 100%, rgba(66, 133, 244, 0.45), transparent 75%),
+    linear-gradient(to top, rgba(26, 115, 232, 0.35), transparent 85%);
+  filter: blur(24px);
+  pointer-events: none;
+  /* Hidden below the screen until the conversation starts... */
+  transform: translateY(100%);
+  transition: transform 1.1s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.12s linear;
+}
+
+/* ...then it slides up from bottom to top. */
+body:not([data-state="idle"]) .glow { transform: translateY(0); }
+
+/* While the bot is "thinking", the glow gently pulses. */
+body[data-state="thinking"] .glow { animation: pulse 1.6s ease-in-out infinite; }
+
+/* When the mic is muted and nothing is playing, the glow dims. */
+body.muted[data-state="listening"] .glow { opacity: 0.35; }
+
+@keyframes pulse {
+  0%, 100% { filter: blur(24px) brightness(0.9); }
+  50% { filter: blur(28px) brightness(1.25); }
+}
+
+/* ---------- Screens ---------- */
+.screen {
+  position: relative;
+  z-index: 1;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+}
+
+/* ---------- Start screen ---------- */
+.start-screen { justify-content: center; text-align: center; gap: 12px; }
+
+.sparkle {
+  font-size: 44px;
+  background: linear-gradient(135deg, var(--blue-light), var(--blue-dark));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.2rem); font-weight: 500; }
+
+.subtitle { margin: 0 0 20px; color: var(--text-dim); }
+
+.start-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 28px;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--blue), var(--blue-dark));
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 8px 30px rgba(66, 133, 244, 0.35);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.start-btn:hover { transform: translateY(-1px); box-shadow: 0 10px 36px rgba(66, 133, 244, 0.5); }
+.start-btn svg { width: 22px; height: 22px; fill: currentColor; }
+
+.start-error { min-height: 1.5em; color: #f28b82; max-width: 420px; }
+
+/* ---------- Live screen ---------- */
+.live-screen { justify-content: space-between; }
+
+.top-bar { width: 100%; display: flex; justify-content: center; }
+
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--blue-light);
+  box-shadow: 0 0 10px var(--blue-light);
+  animation: blink 2s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity: 0.35; } }
+
+/* Captions in the middle of the screen. */
+.captions {
+  flex: 1;
+  width: 100%;
+  max-width: 680px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+  overflow-y: auto;
+}
+.caption { margin: 0; transition: opacity 0.4s ease; }
+.caption:empty { opacity: 0; }
+.user-caption { color: var(--text-dim); font-size: 1rem; }
+.bot-caption { font-size: clamp(1.25rem, 3vw, 1.6rem); line-height: 1.45; font-weight: 400; }
+.bot-caption.error { color: #f28b82; font-size: 1.05rem; }
+
+/* ---------- Bottom dock: status, wave pill, buttons ---------- */
+.dock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 12px;
+}
+
+.status { margin: 0; min-height: 1.4em; color: var(--text); font-size: 0.95rem; opacity: 0.85; }
+
+/* The curved rectangle with the moving blue wave. */
+.wave-pill {
+  width: 220px;
+  height: 68px;
+  padding: 0;
+  border-radius: 34px;
+  border: 1px solid rgba(138, 180, 248, 0.35);
+  background: rgba(26, 115, 232, 0.14);
+  backdrop-filter: blur(12px);
+  overflow: hidden;
+  cursor: default;
+  /* Breathes with the voice: a little wider and taller when louder. */
+  transform: scale(calc(1 + var(--level) * 0.14), calc(1 + var(--level) * 0.22));
+  transition: transform 0.08s linear, filter 0.3s ease;
+  box-shadow: 0 0 calc(18px + var(--level) * 40px) rgba(66, 133, 244, 0.45);
+}
+.wave-pill canvas { width: 100%; height: 100%; display: block; }
+body[data-state="speaking"] .wave-pill { cursor: pointer; }
+body.muted .wave-pill { filter: grayscale(0.8) brightness(0.8); }
+
+.controls { display: flex; gap: 24px; }
+
+.round-btn {
+  width: 58px;
+  height: 58px;
+  border: none;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.15s ease;
+}
+.round-btn:hover { transform: scale(1.06); }
+.round-btn svg { width: 26px; height: 26px; fill: currentColor; }
+
+.mic-btn { background: var(--surface); }
+.mic-btn .icon-mic-off { display: none; }
+/* Muted: the button turns red-ish and shows the crossed-out mic. */
+.mic-btn[aria-pressed="true"] { background: #fce8e6; color: #c5221f; }
+.mic-btn[aria-pressed="true"] .icon-mic { display: none; }
+.mic-btn[aria-pressed="true"] .icon-mic-off { display: block; }
+
+.end-btn { background: var(--red); color: #fff; }
+
+/* Respect users who prefer less motion. */
+@media (prefers-reduced-motion: reduce) {
+  .glow, .wave-pill, .live-dot { transition: none; animation: none; }
+}

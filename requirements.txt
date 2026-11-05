@@ -1,0 +1,12 @@
+# --- Runtime dependencies (needed to run the app) ---
+# Web framework + server
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9     # lets FastAPI read file uploads (multipart/form-data)
+pydantic-settings>=2.3      # typed settings from environment variables / .env
+
+# AI services
+groq>=0.11                  # official Groq SDK (LLM)
+faster-whisper>=1.0         # Speech-to-Text (Whisper on CTranslate2)
+av>=12,<17                  # audio decoding for faster-whisper; av 17+ breaks faster-whisper 1.2.x
+piper-tts>=1.3              # Text-to-Speech (Piper neural voices)

@@ -1,0 +1,30 @@
+# Central configuration for the project's tools.
+
+[project]
+name = "voice-chatbot"
+version = "1.0.0"
+description = "Voice chatbot: Speech-to-Text -> Groq LLM -> Text-to-Speech, served by FastAPI"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# E/W: style errors, F: real bugs (unused imports...), I: import order,
+# B: common bug patterns, UP: modern Python syntax, N: naming conventions
+select = ["E", "W", "F", "I", "B", "UP", "N"]
+ignore = ["B008"]  # FastAPI's Depends()/File() in defaults is the intended pattern
+
+[tool.mypy]
+python_version = "3.11"
+strict = false
+disallow_untyped_defs = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["tests/"]
