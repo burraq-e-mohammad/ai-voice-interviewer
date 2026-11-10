@@ -1,66 +1,73 @@
-"""Unit tests for the in-memory conversation history."""
+"""Unit tests for the in-memory interview session manager."""
 
+from app.models.schemas import CandidateProfile
 from app.services.memory import ConversationMemory
 
 
-def test_new_session_has_empty_history() -> None:
-    memory = ConversationMemory(max_turns=3, max_sessions=10)
+def test_new_session_has_empty_history_and_default_profile() -> None:
+    memory = ConversationMemory(max_turns=5, max_sessions=10)
 
     assert memory.get_history("unknown") == []
+    assert memory.get_turn("unknown") == 1
+    assert memory.get_profile("unknown") == CandidateProfile()
 
 
-def test_stores_user_and_assistant_messages_in_order() -> None:
-    memory = ConversationMemory(max_turns=3, max_sessions=10)
+def test_start_session_stores_profile_and_opening_message() -> None:
+    memory = ConversationMemory(max_turns=5, max_sessions=10)
+    profile = CandidateProfile(name="Alex", position="Backend Engineer", company="Stripe")
 
-    memory.add_exchange("s1", "Hi", "Hello!")
+    memory.start_session("s1", profile)
+    memory.record_interviewer_opening("s1", "Welcome Alex!")
 
-    history = memory.get_history("s1")
-    assert [(m.role, m.content) for m in history] == [("user", "Hi"), ("assistant", "Hello!")]
+    assert memory.get_profile("s1") == profile
+    assert [(m.role, m.content) for m in memory.get_history("s1")] == [
+        ("assistant", "Welcome Alex!")
+    ]
 
 
-def test_keeps_only_the_last_n_turns() -> None:
+def test_record_exchange_advances_turn_and_marks_complete() -> None:
     memory = ConversationMemory(max_turns=2, max_sessions=10)
+    memory.start_session("s1", CandidateProfile())
 
-    for i in range(5):
-        memory.add_exchange("s1", f"q{i}", f"a{i}")
+    turn1, done1 = memory.record_exchange("s1", "Answer 1", "Question 2")
+    assert (turn1, done1) == (2, False)
 
-    contents = [m.content for m in memory.get_history("s1")]
-    assert contents == ["q3", "a3", "q4", "a4"]
+    turn2, done2 = memory.record_exchange("s1", "Answer 2", "Closing")
+    assert (turn2, done2) == (3, True)
+    assert [m.content for m in memory.get_history("s1")] == [
+        "Answer 1",
+        "Question 2",
+        "Answer 2",
+        "Closing",
+    ]
 
 
 def test_sessions_are_isolated() -> None:
-    memory = ConversationMemory(max_turns=3, max_sessions=10)
-
-    memory.add_exchange("alice", "I am Alice", "Hi Alice")
+    memory = ConversationMemory(max_turns=5, max_sessions=10)
+    memory.start_session("alice", CandidateProfile(name="Alice"))
+    memory.record_exchange("alice", "Hi", "Hello Alice")
 
     assert memory.get_history("bob") == []
 
 
 def test_evicts_least_recently_used_session_when_full() -> None:
-    memory = ConversationMemory(max_turns=3, max_sessions=2)
-    memory.add_exchange("old", "q", "a")
-    memory.add_exchange("middle", "q", "a")
-    memory.add_exchange("old", "q2", "a2")  # "old" is now the most recently used
+    memory = ConversationMemory(max_turns=5, max_sessions=2)
+    memory.record_exchange("old", "q", "a")
+    memory.record_exchange("middle", "q", "a")
+    memory.record_exchange("old", "q2", "a2")  # "old" becomes most recently used
 
-    memory.add_exchange("new", "q", "a")  # over the limit -> evict "middle"
+    memory.record_exchange("new", "q", "a")  # over the limit -> evict "middle"
 
     assert memory.get_history("middle") == []
     assert memory.get_history("old") != []
     assert memory.get_history("new") != []
 
 
-def test_zero_turns_disables_memory() -> None:
-    memory = ConversationMemory(max_turns=0, max_sessions=10)
-
-    memory.add_exchange("s1", "q", "a")
-
-    assert memory.get_history("s1") == []
-
-
 def test_returned_history_is_a_copy() -> None:
-    memory = ConversationMemory(max_turns=3, max_sessions=10)
-    memory.add_exchange("s1", "q", "a")
+    memory = ConversationMemory(max_turns=5, max_sessions=10)
+    memory.record_exchange("s1", "q", "a")
 
-    memory.get_history("s1").clear()  # changing the copy...
+    memory.get_history("s1").clear()
 
-    assert len(memory.get_history("s1")) == 2  # ...does not change the stored history
+    assert len(memory.get_history("s1")) == 2
+

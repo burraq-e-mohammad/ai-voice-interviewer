@@ -1,35 +1,30 @@
 """Shared test setup (pytest loads this file automatically).
 
-Key idea: tests never load the real AI models or call the real Groq API.
-We replace them with tiny *fakes* that return predictable answers. This
-makes the tests fast (milliseconds), free, and runnable without internet.
+Tests replace the real Whisper, Gemini/Groq, and Piper engines with tiny fakes
+so the full suite runs offline in milliseconds.
 """
 
 import os
+from collections.abc import Iterator
 
-# Settings require a Groq key. Set a dummy one BEFORE the app is imported,
-# because the app reads its settings while being imported.
-os.environ.setdefault("GROQ_API_KEY", "test-key-not-real")
+os.environ.setdefault("GEMINI_API_KEY", "test-key-not-real")
 
-from collections.abc import Iterator  # noqa: E402  (must come after the env setup)
+import pytest
+from fastapi.testclient import TestClient
 
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
+from app.api.dependencies import get_pipeline, get_rate_limiter
+from app.core.rate_limit import RateLimiter
+from app.main import app
+from app.models.schemas import CandidateProfile, Message
+from app.services.memory import ConversationMemory
+from app.services.pipeline import VoiceChatPipeline
 
-from app.api.dependencies import get_pipeline, get_rate_limiter  # noqa: E402
-from app.core.rate_limit import RateLimiter  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models.schemas import Message  # noqa: E402
-from app.services.memory import ConversationMemory  # noqa: E402
-from app.services.pipeline import VoiceChatPipeline  # noqa: E402
-
-# A tiny but valid-looking payload. Fakes never decode it, so its content does not matter.
 FAKE_AUDIO = b"RIFF fake wav data"
 FAKE_REPLY_AUDIO = b"RIFF fake reply audio"
 
 
 class FakeSTT:
-    def __init__(self, text: str = "Hello bot") -> None:
+    def __init__(self, text: str = "Hello interviewer") -> None:
         self.text = text
         self.calls: list[bytes] = []
 
@@ -39,14 +34,41 @@ class FakeSTT:
 
 
 class FakeLLM:
-    def __init__(self, reply: str = "Hello human") -> None:
+    def __init__(
+        self,
+        opening: str = "Welcome! Tell me about yourself.",
+        reply: str = "Can you walk through that system's scaling bottlenecks?",
+        score: str = "8.5/10",
+        report: str = "## Candidate Score: 8.5/10\nStrong system design.",
+    ) -> None:
+        self.opening = opening
         self.reply = reply
-        # Record what we were asked, so tests can check the history was passed in.
-        self.calls: list[tuple[str, list[Message]]] = []
+        self.score = score
+        self.report = report
+        self.opening_calls: list[tuple[CandidateProfile, int]] = []
+        self.calls: list[tuple[str, list[Message], CandidateProfile | None, int, int]] = []
+        self.evaluate_calls: list[tuple[CandidateProfile, list[Message]]] = []
 
-    def generate_reply(self, user_text: str, history: list[Message] | None = None) -> str:
-        self.calls.append((user_text, list(history or [])))
+    def generate_opening_question(self, profile: CandidateProfile, max_turns: int) -> str:
+        self.opening_calls.append((profile, max_turns))
+        return self.opening
+
+    def generate_reply(
+        self,
+        user_text: str,
+        history: list[Message] | None = None,
+        profile: CandidateProfile | None = None,
+        turn: int = 1,
+        max_turns: int = 20,
+    ) -> str:
+        self.calls.append((user_text, list(history or []), profile, turn, max_turns))
         return self.reply
+
+    def evaluate_interview(
+        self, profile: CandidateProfile, history: list[Message]
+    ) -> tuple[str, str]:
+        self.evaluate_calls.append((profile, list(history)))
+        return self.score, self.report
 
 
 class FakeTTS:
@@ -70,7 +92,8 @@ def pipeline(fake_stt: FakeSTT, fake_llm: FakeLLM) -> VoiceChatPipeline:
         stt=fake_stt,
         llm=fake_llm,
         tts=FakeTTS(),
-        memory=ConversationMemory(max_turns=5, max_sessions=100),
+        memory=ConversationMemory(max_turns=20, max_sessions=100),
+        max_turns=20,
     )
 
 
@@ -79,7 +102,6 @@ def client(pipeline: VoiceChatPipeline) -> Iterator[TestClient]:
     """A test client whose app uses the fake pipeline and a fresh rate limiter."""
     app.dependency_overrides[get_pipeline] = lambda: pipeline
     app.dependency_overrides[get_rate_limiter] = lambda: RateLimiter(100, 60)
-    # raise_server_exceptions=False lets us test our 500 error handler.
     yield TestClient(app, raise_server_exceptions=False)
-    # Clean up so overrides never leak into other tests.
     app.dependency_overrides.clear()
+

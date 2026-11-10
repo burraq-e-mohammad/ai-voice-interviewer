@@ -1,80 +1,265 @@
 <!doctype html>
 <!--
-  Voice Chatbot: hands-free web client (Gemini-Live style).
-
-  How to run:
-    1. Start the API:      uvicorn app.main:app --reload
-    2. Serve this folder:  python -m http.server 5500 --directory client
-    3. Open:               http://localhost:5500
-
-  Why port 5500 and not double-clicking the file?
-    * Browsers only give microphone access to secure pages (https or localhost).
-    * The API only accepts browser requests from allowed origins (CORS_ORIGINS),
-      and http://localhost:5500 is in that list by default.
-
-  Files:
-    index.html  the page structure (this file)
-    styles.css  the look: dark theme, blue glow, wave pill, buttons
-    app.js      the logic: mic, silence detection, calling POST /chat, playing replies
+  AI Voice Interviewer: Gemini-Live Style Voice Simulator.
+  Powered by Faster-Whisper (STT), Google Gemini (LLM), and Piper TTS.
 -->
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Voice Chatbot Live</title>
+  <title>AI Voice Interviewer — Gemini Live Simulator</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body data-state="idle">
-  <!-- The blue light that rises from the bottom of the screen. Its height and
-       brightness follow the voice level (set from app.js via the --level CSS variable). -->
+  <!-- Glowing ambient light driven by Web Audio RMS level -->
   <div class="glow" aria-hidden="true"></div>
 
-  <!-- ===== Start screen (shown before the conversation begins) ===== -->
-  <main id="startScreen" class="screen start-screen">
-    <div class="sparkle" aria-hidden="true">✦</div>
-    <h1>Talk to your assistant</h1>
-    <p class="subtitle">Just speak naturally. I'll reply when you pause.</p>
-    <button id="startBtn" class="start-btn" type="button">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
-      Start talking
-    </button>
-    <p id="startError" class="start-error" role="alert"></p>
+  <!-- ======================================================== -->
+  <!-- SCREEN 1: Candidate Setup & Profiling (Modernized UI)    -->
+  <!-- ======================================================== -->
+  <main id="startScreen" class="screen setup-screen">
+    <div class="setup-container">
+      <header class="setup-header">
+        <!-- Top Pill Badge -->
+        <div class="badge-pill">
+          <span class="badge-dot"></span>
+          <span>Next-Gen Voice Interview Simulator</span>
+        </div>
+
+        <!-- Modern AI Voice Emblem -->
+        <div class="brand-logo" aria-hidden="true">
+          <svg viewBox="0 0 54 54" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="27" cy="27" r="25" stroke="url(#logoGlow)" stroke-width="2.5" fill="rgba(37, 99, 235, 0.12)" />
+            <rect x="13" y="21" width="3" height="12" rx="1.5" fill="#60a5fa" />
+            <rect x="19" y="15" width="3" height="24" rx="1.5" fill="#93c5fd" />
+            <rect x="25" y="10" width="4" height="34" rx="2" fill="#3b82f6" />
+            <rect x="32" y="15" width="3" height="24" rx="1.5" fill="#93c5fd" />
+            <rect x="38" y="21" width="3" height="12" rx="1.5" fill="#60a5fa" />
+            <circle cx="27" cy="27" r="5" fill="#2563eb" stroke="#fff" stroke-width="2" />
+            <defs>
+              <linearGradient id="logoGlow" x1="4" y1="4" x2="50" y2="50" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#93c5fd" />
+                <stop offset="0.5" stop-color="#3b82f6" />
+                <stop offset="1" stop-color="#1d4ed8" />
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+
+        <h1>AI Voice Interviewer</h1>
+        <p class="subtitle">Experience a live technical & behavioral voice interview precisely calibrated to your target company's hiring rounds, job description, and resume.</p>
+      </header>
+
+      <form id="profileForm" class="setup-form" onsubmit="return false;">
+        <!-- Section 1: Role & Candidate Specifications -->
+        <div class="section-legend">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" aria-hidden="true"><path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" /></svg>
+          <span>Candidate & Target Role</span>
+        </div>
+
+        <!-- Row 1: Candidate Name & Target Position -->
+        <div class="form-row">
+          <div class="form-group">
+            <label for="candidateName">Candidate Name</label>
+            <input id="candidateName" type="text" placeholder="e.g. Alex Morgan" required autocomplete="name" />
+          </div>
+          <div class="form-group">
+            <label for="targetPosition">Target Position / Role</label>
+            <input id="targetPosition" type="text" placeholder="e.g. Senior Software Engineer" required />
+          </div>
+        </div>
+
+        <!-- Row 2: Seniority Level & Target Company -->
+        <div class="form-row">
+          <div class="form-group">
+            <label for="seniorityLevel">Seniority Level</label>
+            <select id="seniorityLevel">
+              <option value="Junior">Junior (0 - 2 years)</option>
+              <option value="Mid-Level">Mid-Level (3 - 5 years)</option>
+              <option value="Senior" selected>Senior (5+ years)</option>
+              <option value="Lead / Staff">Lead / Principal (8+ years)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="targetCompany">Target Company</label>
+            <input id="targetCompany" type="text" placeholder="e.g. Google, Amazon, Meta, Stripe, Netflix" required />
+          </div>
+        </div>
+
+        <!-- Section 2: Technical Competencies & Materials -->
+        <div class="section-legend" style="margin-top: 10px;">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="14" height="14" aria-hidden="true"><path d="M7 3a1 1 0 000 2h6a1 1 0 100-2H7zM4 7a1 1 0 011-1h10a1 1 0 110 2H5a1 1 0 01-1-1zM2 11a2 2 0 012-2h12a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4z" /></svg>
+          <span>Competencies, Resume & Requirements</span>
+        </div>
+
+        <!-- Row 3: Key Skills & Technologies -->
+        <div class="form-group">
+          <label for="candidateSkills">Key Skills & Core Technologies</label>
+          <input id="candidateSkills" type="text" placeholder="e.g. Python, FastAPI, React, System Design, PostgreSQL, Kubernetes" />
+        </div>
+
+        <!-- Row 4: Resume Upload (PDF, DOCX, TXT delivered to LLM) -->
+        <div class="form-group">
+          <label>Attach Resume <span class="hint">(PDF, DOCX, or TXT — extracted for interviewer context)</span></label>
+          <div class="file-upload-card" id="dropzone" title="Click or drag and drop your resume file here">
+            <input type="file" id="resumeFile" accept=".pdf,.docx,.txt" style="display: none;" />
+            <button type="button" class="upload-trigger-btn" id="uploadBtn">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+              <span>Browse File</span>
+            </button>
+            <div class="file-info-col">
+              <span class="file-status-text" id="fileStatusText">Click to choose or drop resume file here</span>
+              <span class="file-subhint">Supports PDF, DOCX, TXT up to 15MB</span>
+            </div>
+            <button type="button" class="clear-file-btn" id="clearFileBtn" hidden title="Remove resume">×</button>
+          </div>
+        </div>
+
+        <!-- Row 5: Job Description -->
+        <div class="form-group">
+          <label for="jobDescription">Target Job Description <span class="hint">(paste requirements, tech stack, or JD highlights)</span></label>
+          <textarea id="jobDescription" rows="3" placeholder="Paste the target job description, core competencies, tech stack, and responsibilities here..."></textarea>
+        </div>
+
+        <div class="action-footer">
+          <button id="startBtn" class="start-btn" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+            <span>Begin Voice Interview</span>
+          </button>
+          <p id="startError" class="start-error" role="alert"></p>
+
+          <!-- Feature Highlights Bar -->
+          <div class="setup-feature-pills">
+            <span class="feature-pill">🎙️ 20 Spoken Questions</span>
+            <span class="feature-pill">⏱️ 30-Min Countdown</span>
+            <span class="feature-pill">🏢 Target Company Standards</span>
+            <span class="feature-pill">📊 Scorecard & Insights</span>
+          </div>
+        </div>
+      </form>
+    </div>
   </main>
 
-  <!-- ===== Live screen (shown during the conversation) ===== -->
+  <!-- ======================================================== -->
+  <!-- SCREEN 2: Live Hands-Free Voice Interview                -->
+  <!-- ======================================================== -->
   <main id="liveScreen" class="screen live-screen" hidden>
     <header class="top-bar">
-      <span class="live-badge"><span class="live-dot"></span>Live</span>
+      <!-- Role & Company Info -->
+      <div class="role-pill">
+        <span id="liveRoleText">Software Engineer</span>
+        <span class="role-divider">•</span>
+        <span id="liveCompanyText">Target Company</span>
+      </div>
+
+      <!-- Timers: Total Interview 30m Countdown & Question 90s Countdown -->
+      <div class="timers-cluster">
+        <div class="timer-pill total-timer" id="totalTimerBadge" title="Total interview time remaining">
+          <span class="timer-icon">⏱️</span>
+          <span class="timer-lbl">Total:</span>
+          <span id="totalTimeText" class="timer-digits">30:00</span>
+        </div>
+
+        <div class="timer-pill question-timer" id="questionTimerBadge" title="Time remaining for current question answer">
+          <span class="timer-icon">⏳</span>
+          <span class="timer-lbl">Answer:</span>
+          <span id="questionTimeText" class="timer-digits">01:30</span>
+        </div>
+      </div>
+
+      <!-- Progress Badge (20 Questions) -->
+      <div class="turn-pill" id="turnBadge">
+        Question 1 of 20
+      </div>
     </header>
 
-    <!-- What was said: the user's words (small) and the bot's reply (large). -->
-    <section class="captions" aria-live="polite">
-      <p id="userCaption" class="caption user-caption"></p>
-      <p id="botCaption" class="caption bot-caption"></p>
+    <!-- Captions: Candidate Recognized Speech & Spoken Interviewer Question -->
+    <section class="captions-container" aria-live="polite">
+      <div id="userBox" class="caption-card user-card">
+        <span class="caption-sender">You (Candidate)</span>
+        <p id="userCaption" class="caption user-caption">Listening for your response...</p>
+      </div>
+
+      <div id="botBox" class="caption-card bot-card">
+        <span class="caption-sender" id="botSenderLabel">AI Interviewer</span>
+        <p id="botCaption" class="caption bot-caption">Preparing first question...</p>
+      </div>
     </section>
 
+    <!-- Bottom Dock: Wave visualizer, silence detection, controls -->
     <footer class="dock">
       <p id="status" class="status">Listening…</p>
 
-      <!-- The animated wave "pill". Click it while the bot speaks to interrupt. -->
-      <button id="wavePill" class="wave-pill" type="button" aria-label="Voice activity. Click to interrupt the reply.">
+      <!-- The dynamic wave pill: Click while speaking to interrupt immediately -->
+      <button id="wavePill" class="wave-pill" type="button" aria-label="Voice activity. Click to interrupt reply.">
         <canvas id="waveCanvas"></canvas>
       </button>
 
       <div class="controls">
-        <!-- Mute: turns the microphone off so the bot can talk without being interrupted. -->
+        <!-- Mute: temporarily silence microphone -->
         <button id="micBtn" class="round-btn mic-btn" type="button" aria-pressed="false" aria-label="Mute microphone" title="Mute microphone">
           <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
           <svg class="icon-mic-off" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12h-2c0 .8-.2 1.6-.5 2.3l1.5 1.5c.6-1.1 1-2.4 1-3.8Zm-4 .2V6a3 3 0 0 0-5.9-.8L15 11.1v1.1ZM4.3 3 3 4.3l6 6V12a3 3 0 0 0 4.4 2.6l1.6 1.7A5 5 0 0 1 7 12H5a7 7 0 0 0 6 6.9V21h2v-2.1c1-.1 1.9-.5 2.7-1l4 4 1.3-1.3L4.3 3Z"/></svg>
         </button>
-        <!-- End: stops the conversation and releases the microphone. -->
-        <button id="endBtn" class="round-btn end-btn" type="button" aria-label="End conversation" title="End conversation">
+
+        <!-- Conclude & Evaluate: lets candidate wrap up anytime -->
+        <button id="finishBtn" class="pill-btn finish-btn" type="button" title="Conclude interview and generate score report">
+          <span>Conclude & Score</span>
+        </button>
+
+        <!-- Exit: stops audio and exits session -->
+        <button id="endBtn" class="round-btn end-btn" type="button" aria-label="Exit interview" title="Exit interview">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12Z"/></svg>
         </button>
       </div>
     </footer>
+  </main>
+
+  <!-- ======================================================== -->
+  <!-- SCREEN 3: Comprehensive Evaluation Scorecard             -->
+  <!-- ======================================================== -->
+  <main id="evalScreen" class="screen eval-screen" hidden>
+    <div class="eval-container">
+      <header class="eval-header">
+        <div class="eval-badge">Assessment Complete</div>
+        <h1>Performance Scorecard</h1>
+        <p class="subtitle" id="evalSubtitle">Candidate evaluation against target company hiring standards</p>
+      </header>
+
+      <!-- Score Summary Banner (Fixed circle layout to prevent text clipping) -->
+      <section class="score-banner">
+        <div class="score-circle">
+          <span class="score-val" id="evalScoreVal">--/10</span>
+          <span class="score-lbl">OVERALL SCORE</span>
+        </div>
+        <div class="score-meta">
+          <h2 id="evalCandidateName">Candidate</h2>
+          <p id="evalRoleSummary">Target Role</p>
+          <div class="recommendation-tag" id="evalRecommendationTag">Analysis Ready</div>
+        </div>
+      </section>
+
+      <!-- Markdown Report Body -->
+      <section class="report-content" id="evalReportBody">
+        <div class="loading-state">
+          <div class="spinner"></div>
+          <p>Evaluating dialogue against target company questions and job requirements...</p>
+        </div>
+      </section>
+
+      <!-- Footer Actions -->
+      <footer class="eval-actions">
+        <button id="restartBtn" class="start-btn" type="button">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35Z"/></svg>
+          <span>Start Another Interview</span>
+        </button>
+        <button id="copyReportBtn" class="pill-btn secondary-btn" type="button">
+          <span>Copy Scorecard</span>
+        </button>
+      </footer>
+    </div>
   </main>
 
   <script src="app.js"></script>

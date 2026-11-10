@@ -1,55 +1,91 @@
-"""Short-term conversation memory.
-
-Why have memory at all?
-  Without it, every question is answered in isolation, so a follow-up like
-  "and how tall is it?" makes no sense to the bot. Keeping the last few
-  exchanges fixes that.
-
-Why keep it this simple?
-  * It is in RAM only - no database to install. Restarting the server clears it.
-  * Each session keeps only the last N exchanges (a `deque` with `maxlen`
-    drops the oldest automatically), which also keeps LLM prompts small.
-  * At most `max_sessions` sessions are stored; the least recently used one is
-    evicted. This stops a client from filling RAM with fake session IDs.
-  * Memory is optional: requests without a session_id are stateless.
-"""
+"""Session memory tracking candidate profiles, conversation turns, and dialogue history."""
 
 import threading
 from collections import OrderedDict, deque
+from dataclasses import dataclass, field
 
-from app.models.schemas import Message
+from app.models.schemas import CandidateProfile, Message
+
+
+@dataclass
+class SessionData:
+    """State storage for a single active interview session."""
+
+    profile: CandidateProfile
+    turn_count: int = 1
+    history: deque[Message] = field(default_factory=lambda: deque(maxlen=60))
+    is_complete: bool = False
 
 
 class ConversationMemory:
-    def __init__(self, max_turns: int, max_sessions: int) -> None:
-        # One "turn" = a user message + an assistant reply = 2 messages.
-        self._max_messages = max_turns * 2
+    """Thread-safe in-memory session manager with LRU eviction."""
+
+    def __init__(self, max_turns: int, max_sessions: int = 1000) -> None:
+        self._max_turns = max_turns
         self._max_sessions = max_sessions
-        # OrderedDict remembers insertion order, which we use as "least recently used" order.
-        self._sessions: OrderedDict[str, deque[Message]] = OrderedDict()
+        self._sessions: OrderedDict[str, SessionData] = OrderedDict()
         self._lock = threading.Lock()
 
-    def get_history(self, session_id: str) -> list[Message]:
-        """Return a copy of the session's past messages (oldest first)."""
+    def start_session(self, session_id: str, profile: CandidateProfile) -> SessionData:
+        """Initialize or reset an interview session with a candidate profile."""
         with self._lock:
-            history = self._sessions.get(session_id)
-            return list(history) if history else []
-
-    def add_exchange(self, session_id: str, user_text: str, assistant_text: str) -> None:
-        """Store one user question and the bot's answer."""
-        if self._max_messages == 0:
-            return  # memory disabled via MAX_HISTORY_TURNS=0
-
-        with self._lock:
-            history = self._sessions.get(session_id)
-            if history is None:
-                history = deque(maxlen=self._max_messages)
-                self._sessions[session_id] = history
-            history.append(Message(role="user", content=user_text))
-            history.append(Message(role="assistant", content=assistant_text))
-
-            # Mark this session as most recently used...
+            session = SessionData(profile=profile, turn_count=1)
+            self._sessions[session_id] = session
             self._sessions.move_to_end(session_id)
-            # ...and evict the least recently used ones if we have too many.
-            while len(self._sessions) > self._max_sessions:
-                self._sessions.popitem(last=False)
+            self._evict_oldest()
+            return session
+
+    def get_session(self, session_id: str) -> SessionData | None:
+        """Retrieve an active session by its ID."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                self._sessions.move_to_end(session_id)
+            return session
+
+    def get_history(self, session_id: str) -> list[Message]:
+        """Return the past messages for a given session."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return list(session.history) if session else []
+
+    def get_profile(self, session_id: str) -> CandidateProfile:
+        """Return the candidate profile for the session (or default if not found)."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return session.profile if session else CandidateProfile()
+
+    def get_turn(self, session_id: str) -> int:
+        """Return the current turn number for this session."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            return session.turn_count if session else 1
+
+    def record_exchange(self, session_id: str, user_text: str, assistant_text: str) -> tuple[int, bool]:
+        """Record an interview turn (candidate answer + interviewer question) and advance turn."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = SessionData(profile=CandidateProfile(), turn_count=1)
+                self._sessions[session_id] = session
+
+            session.history.append(Message(role="user", content=user_text))
+            session.history.append(Message(role="assistant", content=assistant_text))
+            session.turn_count += 1
+            if session.turn_count > self._max_turns:
+                session.is_complete = True
+
+            self._sessions.move_to_end(session_id)
+            self._evict_oldest()
+            return session.turn_count, session.is_complete
+
+    def record_interviewer_opening(self, session_id: str, opening_text: str) -> None:
+        """Record the initial opening statement/question from the interviewer."""
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session:
+                session.history.append(Message(role="assistant", content=opening_text))
+
+    def _evict_oldest(self) -> None:
+        while len(self._sessions) > self._max_sessions:
+            self._sessions.popitem(last=False)

@@ -62,3 +62,4 @@ def test_clients_are_limited_independently() -> None:
     limiter.check("1.1.1.1")
 
     limiter.check("2.2.2.2")  # a different client still has its own quota
+

@@ -1,9 +1,9 @@
 # Central configuration for the project's tools.
 
 [project]
-name = "voice-chatbot"
-version = "1.0.0"
-description = "Voice chatbot: Speech-to-Text -> Groq LLM -> Text-to-Speech, served by FastAPI"
+name = "ai-voice-interviewer"
+version = "2.0.0"
+description = "Hands-free AI voice interviewer: Faster-Whisper STT -> Google Gemini / Groq LLM -> Piper TTS, served by FastAPI"
 requires-python = ">=3.11"
 
 [tool.pytest.ini_options]

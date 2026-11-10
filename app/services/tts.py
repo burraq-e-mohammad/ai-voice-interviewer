@@ -10,6 +10,7 @@ Why Piper?
 
 import io
 import logging
+import re
 import wave
 from pathlib import Path
 from typing import Any
@@ -27,13 +28,16 @@ class TextToSpeech:
         """
         if voice is None:
             path = Path(voice_path)
-            # Fail early with a clear "how to fix it" message, instead of a
-            # confusing error deep inside the ONNX runtime.
             if not path.is_file():
-                raise FileNotFoundError(
-                    f"Piper voice not found at '{path}'. "
-                    "Run `python scripts/download_voice.py` to download it."
-                )
+                # Check relative to project root
+                alt_path = Path(__file__).resolve().parent.parent.parent / voice_path
+                if alt_path.is_file():
+                    path = alt_path
+                else:
+                    raise FileNotFoundError(
+                        f"Piper voice not found at '{path}' or '{alt_path}'. "
+                        "Run `python scripts/download_voice.py` to download it."
+                    )
             from piper import PiperVoice
 
             logger.info("Loading Piper voice '%s'...", path.name)
@@ -49,13 +53,18 @@ class TextToSpeech:
         if not text.strip():
             raise SpeechSynthesisError("Cannot speak an empty reply.")
 
+        # Clean and normalize text for neural voice synthesis
+        clean_text = text.replace("’", "'").replace("“", '"').replace("”", '"').replace("—", ", ").replace("–", ", ")
+        clean_text = re.sub(r"[\*#_`~<>]", "", clean_text)
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
+
         # We write the WAV into memory (BytesIO) instead of a file on disk:
         # it is faster and there are no temp files to clean up.
         buffer = io.BytesIO()
         try:
             with wave.open(buffer, "wb") as wav_file:
                 # Piper sets the WAV header (sample rate, channels) for us.
-                self._voice.synthesize_wav(text, wav_file)
+                self._voice.synthesize_wav(clean_text, wav_file)
         except Exception as exc:
             logger.error("Piper synthesis failed: %s", exc)
             raise SpeechSynthesisError("Could not generate the spoken reply.") from exc

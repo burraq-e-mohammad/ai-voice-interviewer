@@ -1,14 +1,4 @@
-"""FastAPI dependencies: shared objects that endpoints receive via `Depends()`.
-
-Why dependencies?
-  * The heavy objects (AI models) are created ONCE and reused (`lru_cache`).
-  * Tests can replace any of them with `app.dependency_overrides[...]`, so
-    the test suite never loads real models or calls the real Groq API.
-
-Models are loaded lazily - on the first /chat request, not at startup. This
-keeps startup instant and the tests light. The trade-off: the very first
-request is slower (and on first run, the Whisper model is downloaded).
-"""
+"""FastAPI dependencies: shared singleton objects for AI services, pipeline, and rate limiting."""
 
 from functools import lru_cache
 
@@ -25,8 +15,17 @@ from app.services.tts import TextToSpeech
 
 @lru_cache
 def get_pipeline() -> VoiceChatPipeline:
-    """Build the full pipeline once and reuse it for every request."""
+    """Builds the full AI Voice Interview pipeline once and reuses it across requests."""
     settings = get_settings()
+
+    provider = settings.llm_provider.lower()
+    if provider == "gemini":
+        api_key = settings.gemini_api_key.get_secret_value()
+        model = settings.gemini_model
+    else:
+        api_key = settings.groq_api_key.get_secret_value()
+        model = settings.groq_model
+
     return VoiceChatPipeline(
         stt=SpeechToText(
             model_size=settings.whisper_model_size,
@@ -34,24 +33,24 @@ def get_pipeline() -> VoiceChatPipeline:
             compute_type=settings.whisper_compute_type,
         ),
         llm=LLMService(
-            # get_secret_value() is the only place the real key is read.
-            api_key=settings.groq_api_key.get_secret_value(),
-            model=settings.groq_model,
-            system_prompt=settings.system_prompt,
+            api_key=api_key,
+            model=model,
+            provider=provider,
             max_tokens=settings.llm_max_tokens,
             timeout_seconds=settings.llm_timeout_seconds,
         ),
         tts=TextToSpeech(voice_path=settings.piper_voice_path),
         memory=ConversationMemory(
-            max_turns=settings.max_history_turns,
+            max_turns=settings.max_interview_turns,
             max_sessions=settings.max_sessions,
         ),
+        max_turns=settings.max_interview_turns,
     )
 
 
 @lru_cache
 def get_rate_limiter() -> RateLimiter:
-    """One shared rate limiter for the whole app."""
+    """Shared rate limiter instance."""
     settings = get_settings()
     return RateLimiter(
         max_requests=settings.rate_limit_requests,
@@ -63,13 +62,11 @@ def enforce_rate_limit(
     request: Request,
     limiter: RateLimiter = Depends(get_rate_limiter),
 ) -> None:
-    """Runs before the endpoint; raises RateLimitExceededError if over the limit."""
-    # We identify clients by IP address. (Behind a reverse proxy you would read
-    # the X-Forwarded-For header instead - see docs/SECURITY.md.)
+    """Validates that the incoming client IP has not exceeded rate quotas."""
     client_ip = request.client.host if request.client else "unknown"
     limiter.check(client_ip)
 
 
 def get_app_settings() -> Settings:
-    """Wrapper so endpoints can depend on settings (and tests can override them)."""
+    """Settings accessor dependency."""
     return get_settings()

@@ -1,7 +1,7 @@
 """Unit tests for the STT, LLM and TTS service wrappers.
 
 Each service accepts an optional fake engine/client in its constructor, so we
-can test OUR code (error handling, message building) without the real models.
+test our wrapper logic (error handling, formatting, prompt assembly) offline.
 """
 
 import io
@@ -17,7 +17,7 @@ from app.core.errors import (
     NoSpeechDetectedError,
     SpeechSynthesisError,
 )
-from app.models.schemas import Message
+from app.models.schemas import CandidateProfile, Message
 from app.services.llm import LLMService
 from app.services.stt import SpeechToText
 from app.services.tts import TextToSpeech
@@ -61,10 +61,10 @@ def test_stt_wraps_decoding_errors() -> None:
 # --- LLM ----------------------------------------------------------------------
 
 
-class FakeGroqClient:
-    """Mimics the shape `client.chat.completions.create(...)` of the Groq SDK."""
+class FakeChatClient:
+    """Mimics the OpenAI-compatible `client.chat.completions.create(...)` interface."""
 
-    def __init__(self, reply: str | None = "Hi!", error: Exception | None = None) -> None:
+    def __init__(self, reply: str | None = "Tell me about your architecture.", error: Exception | None = None) -> None:
         self.last_request: dict[str, Any] = {}
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
         self._reply = reply
@@ -78,44 +78,67 @@ class FakeGroqClient:
         return SimpleNamespace(choices=[SimpleNamespace(message=message)])
 
 
-def make_llm(client: FakeGroqClient) -> LLMService:
-    return LLMService(api_key="x", model="test-model", system_prompt="Be brief.", client=client)
+def make_llm(client: FakeChatClient) -> LLMService:
+    return LLMService(api_key="x", model="test-model", provider="gemini", client=client)
 
 
-def test_llm_sends_system_prompt_history_and_question() -> None:
-    client = FakeGroqClient()
-    history = [Message("user", "Hi"), Message("assistant", "Hello")]
+def test_llm_sends_profile_history_and_candidate_answer() -> None:
+    client = FakeChatClient()
+    profile = CandidateProfile(name="Alex", position="Data Engineer", company="Stripe")
+    history = [Message("assistant", "Welcome!"), Message("user", "Thanks")]
 
-    reply = make_llm(client).generate_reply("How are you?", history)
+    reply = make_llm(client).generate_reply("I built ETL pipelines.", history=history, profile=profile)
 
-    assert reply == "Hi!"
+    assert reply == "Tell me about your architecture."
     assert client.last_request["model"] == "test-model"
-    assert client.last_request["messages"] == [
-        {"role": "system", "content": "Be brief."},
-        {"role": "user", "content": "Hi"},
-        {"role": "assistant", "content": "Hello"},
-        {"role": "user", "content": "How are you?"},
+    messages = client.last_request["messages"]
+    assert messages[0]["role"] == "system"
+    assert "Stripe" in messages[0]["content"]
+    assert messages[1:] == [
+        {"role": "assistant", "content": "Welcome!"},
+        {"role": "user", "content": "Thanks"},
+        {"role": "user", "content": "I built ETL pipelines."},
     ]
 
 
 def test_llm_wraps_api_errors_without_leaking_details() -> None:
-    client = FakeGroqClient(error=RuntimeError("401 invalid key gsk_secret"))
+    client = FakeChatClient(error=RuntimeError("401 invalid key secret_token_123"))
 
     with pytest.raises(LLMServiceError) as exc_info:
         make_llm(client).generate_reply("Hi")
 
-    assert "gsk_secret" not in exc_info.value.message
+    assert "secret_token_123" not in exc_info.value.message
 
 
-def test_llm_removes_hidden_reasoning_from_reply() -> None:
-    client = FakeGroqClient(reply="<think>\nThe user wants...\n</think>\n\nParis is the capital.")
+def test_llm_strips_hidden_reasoning_and_markdown_symbols() -> None:
+    client = FakeChatClient(reply="<think>\nReasoning...\n</think>\n\n**Great point.** How did you *scale* it?")
 
-    assert make_llm(client).generate_reply("Capital of France?") == "Paris is the capital."
+    assert make_llm(client).generate_reply("Scale?") == "Great point. How did you scale it?"
 
 
 def test_llm_rejects_empty_reply() -> None:
     with pytest.raises(LLMServiceError):
-        make_llm(FakeGroqClient(reply="   ")).generate_reply("Hi")
+        make_llm(FakeChatClient(reply="   ")).generate_reply("Hi")
+
+
+def test_llm_opening_falls_back_gracefully_on_error() -> None:
+    client = FakeChatClient(error=RuntimeError("network blip"))
+    profile = CandidateProfile(name="Jordan", position="Backend Engineer", company="Linear")
+
+    opening = make_llm(client).generate_opening_question(profile, max_turns=20)
+
+    assert "Jordan" in opening
+    assert "Linear" in opening
+
+
+def test_llm_evaluate_extracts_numeric_score() -> None:
+    client = FakeChatClient(reply="## Candidate Score: 9.2/10\n\nExcellent clarity.")
+    profile = CandidateProfile(name="Jordan", position="Backend Engineer", company="Linear")
+
+    score, report = make_llm(client).evaluate_interview(profile, [Message("user", "My answer")])
+
+    assert score == "9.2/10"
+    assert "Excellent clarity." in report
 
 
 # --- Text-to-Speech -----------------------------------------------------------
@@ -124,7 +147,11 @@ def test_llm_rejects_empty_reply() -> None:
 class FakePiperVoice:
     """Mimics piper.PiperVoice.synthesize_wav(): writes 0.1s of silence."""
 
+    def __init__(self) -> None:
+        self.spoken_texts: list[str] = []
+
     def synthesize_wav(self, text: str, wav_file: wave.Wave_write) -> None:
+        self.spoken_texts.append(text)
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(22050)
@@ -136,10 +163,18 @@ def test_tts_returns_a_valid_wav_file() -> None:
 
     audio = tts.synthesize("Hello there")
 
-    # Re-open the bytes as a WAV file to prove they are well-formed.
     with wave.open(io.BytesIO(audio), "rb") as wav_file:
         assert wav_file.getframerate() == 22050
         assert wav_file.getnframes() == 2205
+
+
+def test_tts_normalizes_markdown_and_punctuation() -> None:
+    fake_voice = FakePiperVoice()
+    tts = TextToSpeech("unused.onnx", voice=fake_voice)
+
+    tts.synthesize("**Hello** — it’s `ready`!")
+
+    assert fake_voice.spoken_texts == ["Hello , it's ready!"]
 
 
 def test_tts_rejects_empty_text() -> None:
@@ -152,3 +187,4 @@ def test_tts_rejects_empty_text() -> None:
 def test_tts_missing_voice_file_gives_helpful_error() -> None:
     with pytest.raises(FileNotFoundError, match="download_voice"):
         TextToSpeech("models/does-not-exist.onnx")
+
